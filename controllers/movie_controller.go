@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"time"
+	"log"
+
 	"github.com/gin-gonic/gin"
 	"github.com/jimmymuthoni/movies-stream/database"
 	"github.com/jimmymuthoni/movies-stream/models"
@@ -13,23 +15,61 @@ import (
 
 var movieCollection *mongo.Collection = database.OpenCollection("movies")
 
-func GetMovies(client *mongo.Client) gin.HandlerFunc{
+func GetMovies() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx,cancel := context.WithTimeout(c, 100*time.Second)
-		defer cancel()	
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+		defer cancel()
+
+		if movieCollection == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not initialized"})
+			return
+		}
+
 		cursor, err := movieCollection.Find(ctx, bson.D{})
-		if err != nil{
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch movies"})
+			return
 		}
 		defer cursor.Close(ctx)
 
 		var movies []models.Movie
-		if err = cursor.All(ctx, &movies); err != nil{
+		if err := cursor.All(ctx, &movies); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode movies"})
-			return 
+			return
 		}
 
 		c.JSON(http.StatusOK, movies)
+	}
+}
 
+func GetMovie() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+		defer cancel()
+
+		movieID := c.Param("imdb_id")
+		if movieID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Movie ID is required"})
+			return
+		}
+
+		if movieCollection == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not initialized"})
+			return
+		}
+
+		var movie models.Movie
+		err := movieCollection.FindOne(ctx, bson.M{"imdb_id": movieID}).Decode(&movie)
+		if err != nil {
+			if err == mongo.ErrNoDocuments {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Movie not found"})
+			} else {
+				log.Printf("Error fetching movie: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+			}
+			return
+		}
+
+		c.JSON(http.StatusOK, movie)
 	}
 }
